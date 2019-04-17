@@ -181,12 +181,12 @@
 
             const peers = initialPeersArray.map(peer => {
                 return new Promise((resolve) => {
-                    getNodePeers(`http://${peer}`)
+                    getNodePeers(`https://${peer}`)
                         .then(result => {
                             resolve({status: true, data: result});
                         })
                         .catch(err => {
-                            getNodePeers(`http://${peer}:6860`)
+                            getNodePeers(`https://${peer}:6860`)
                                 .then(result => {
                                     resolve({status: true, data: result});
                                 })
