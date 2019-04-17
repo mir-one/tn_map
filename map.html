@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link rel="icon" type="image/png" href="https://www.turtlenetwork.eu/website/wp-content/uploads/2019/04/favicon-16x16.png">
+    <title>TurtleNetwork nodes on the map</title>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+    <script src="https://api-maps.yandex.ru/2.1/?lang=en_US" type="text/javascript"></script>
+    <style>
+        body, html, #map {
+            width: 100%;
+            height: 100%;
+            padding: 0;
+            margin: 0;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        .card-header {
+            color: white !important;
+        }
+
+        .card.col-md-6, .card.col-sm-12 {
+            padding-left: 0 !important;
+            padding-right: 0 !important;
+        }
+
+        .card-body {
+            padding: 0 !important;
+            max-height: 100%;
+            overflow: scroll;
+        }
+    </style>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.2.1/css/bootstrap.min.css"
+          integrity="sha384-GJzZqFGwb1QTTN6wy59ffF1BuGJpLSa9DkKMp0DgiMDm4iYMj70gZWKYbI706tWS" crossorigin="anonymous">
+    <script src="https://code.jquery.com/jquery-3.3.1.slim.min.js"
+            integrity="sha384-q8i/X+965DzO0rT7abK41JStQIAqVgRVzpbzo5smXKp4YfRvH+8abtTE1Pi6jizo"
+            crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.6/umd/popper.min.js"
+            integrity="sha384-wHAiFfRlMFy6i5SRaxvfOCifBUQy1xHdJ/yoi7FRNXMRBu5WHdZYu1hA6ZOblgut"
+            crossorigin="anonymous"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.2.1/js/bootstrap.min.js"
+            integrity="sha384-B0UglyR+jN6CkvvICOB2joaf5I4l3gm9GU6Hc1og6Ls7i6U/mkkaduKaBhlAXv9k"
+            crossorigin="anonymous"></script>
+
+    <link rel="stylesheet" href="https://unpkg.com/bootstrap-table@1.13.5/dist/bootstrap-table.min.css">
+    <script src="https://unpkg.com/bootstrap-table@1.13.5/dist/bootstrap-table.min.js"></script>
+</head>
+<body>
+<div class="d-flex flex-column container-fluid h-100 justify-content-center align-items-center" id="loader-wrapper">
+    <div id="loading-message"></div>
+</div>
+<div class="container-fluid h-100 ">
+    <div class="row h-100 card-group">
+        <div class="card col-md-6 col-sm-12 h-100">
+            <div class="card-body">
+                <div id="map" class=""></div>
+            </div>
+        </div>
+        <div class="card col-md-6 col-sm-12 h-100" style="max-height: 100%;">
+            <div class="card-body">
+                <div id="table-wrapper">
+                    <table class="table table-sm table-striped table-hover" id="table"
+                           data-toggle="table"
+                           data-sortable="true"
+                    >
+                        <thead>
+                        <tr>
+                            <th data-sortable="true" data-field="number">#</th>
+                            <th data-sortable="true" data-field="name">Name</th>
+                            <th data-sortable="true" data-field="version">Version</th>
+                            <th data-sortable="true" data-field="ip">IP</th>
+                            <th data-sortable="true" data-field="country">Country</th>
+                            <th data-sortable="true" data-field="city">City</th>
+                            <th data-sortable="true" data-field="organization">Organization</th>
+                        </tr>
+                        </thead>
+                        <tbody id="nodes-table-body">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+
+<script>
+
+    const flag = (cc) => {
+        const chars = [...cc.toUpperCase()].map(c => c.charCodeAt() + 127397);
+        return String.fromCodePoint(...chars);
+    }
+
+    const fetchTimeout = (ms, promise) => {
+        return new Promise(function (resolve, reject) {
+            setTimeout(function () {
+                reject(new Error("timeout"))
+            }, ms);
+            promise.then(resolve, reject)
+        });
+    };
+
+    const getNodePeers = async (address) => {
+        const regex = /\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/gm;
+        return fetchTimeout(5000, fetch(`${address}/peers/connected`))
+            .then(res => res.json())
+            .then(nodePeers => {
+                $('#loading-message').text(`Loading data from ${address}: ${nodePeers.peers.length} nodes...`);
+                const peerIps = {};
+                nodePeers.peers.forEach(peer => {
+                    if (peer.address.match(regex) && peer.address.match(regex).length > 0) {
+                        peer.plainIp = peer.address.match(regex)[0];
+                        peerIps[peer.plainIp + peer.peerName] = peer;
+                    }
+                });
+                return peerIps;
+            });
+    };
+
+    const collectUniquePeers = (initialList, responses) => {
+        responses.forEach(response => {
+            if (response.hasOwnProperty('status') && response.status === true) {
+                Object.keys(response.data).forEach(peerKey => {
+                    if (Object.keys(initialList).indexOf(peerKey) === -1) {
+                        initialList[peerKey] = response.data[peerKey];
+                    }
+                });
+            }
+        });
+        return initialList;
+    };
+
+    const getGeoIps = (peers) => {
+        const peerKeys = Object.keys(peers);
+        const peerCount = peerKeys.length;
+        let doneCount = 0;
+        const $loadingMessageWrapper = $('#loading-message')
+        const updateCounter = (doneCount) => {
+            $loadingMessageWrapper.text(`Loading location data: ${doneCount}/${peerCount}`);
+            if (doneCount === peerCount - 1) {
+                $loadingMessageWrapper.hide();
+            }
+        };
+
+        return new Promise((resolve, reject) => {
+            peerKeys.forEach((peerKey, index) => {
+                setTimeout(() => {
+                    fetch(`https://json.geoiplookup.io/${peers[peerKey].plainIp}`)
+                        .then(res => res.json())
+                        .then(json => {
+                            doneCount++;
+                            peers[peerKey].geoData = json;
+                            updateCounter(doneCount);
+                            if (doneCount === peerCount - 1) {
+                                resolve(peers);
+                            }
+                        })
+                        .catch(() => {
+                            doneCount++;
+                            updateCounter(doneCount);
+                            if (doneCount === peerCount - 1) {
+                                resolve(peers);
+                            }
+                        });
+                }, index * 70);
+            });
+        });
+    };
+
+    getNodePeers('https://privatenode.blackturtle.eu')
+        .then(initialPeers => {
+            const initialPeersArray = Object.keys(initialPeers).reduce((accumulator, key) => {
+                accumulator.push(initialPeers[key].plainIp);
+                return accumulator;
+            }, []);
+
+            $('#loading-message').text(`Loading data: ${initialPeersArray.length} nodes...`);
+
+            const peers = initialPeersArray.map(peer => {
+                return new Promise((resolve) => {
+                    getNodePeers(`http://${peer}`)
+                        .then(result => {
+                            resolve({status: true, data: result});
+                        })
+                        .catch(err => {
+                            getNodePeers(`http://${peer}:6860`)
+                                .then(result => {
+                                    resolve({status: true, data: result});
+                                })
+                                .catch(err => {
+                                    console.log()
+                                    resolve({status: false, data: err});
+                                });
+                        });
+                });
+            });
+            Promise.all(peers).then(responses => {
+                const uniquePeers = collectUniquePeers(initialPeers, responses);
+                getGeoIps(uniquePeers).then((peers) => {
+                    console.log('Geo ip data collected, rendering...');
+                    $('#loader-wrapper').removeClass('d-flex').addClass('hidden');
+                    renderNodesOnMap(peers);
+                    renderNodesInTable(peers);
+                });
+            });
+
+        });
+
+    const renderNodesOnMap = (peers) => {
+        const myMap = new ymaps.Map('map', {
+            center: [55.751574, 37.573856],
+            zoom: 3
+        }, {
+            searchControlProvider: 'yandex#search'
+        });
+
+        Object.keys(peers).forEach((peerKey) => {
+            const peer = peers[peerKey];
+            if (peer.geoData === undefined) {
+                console.log('No geo data:', peer);
+                return true;
+            }
+            let MyIconContentLayout = ymaps.templateLayoutFactory.createClass(
+                '<div style="color: #FFFFFF; font-weight: bold;">$[properties.iconContent]</div>'
+            );
+
+            let balloonContent = Object.keys(peer).map(key => {
+                    let value = '';
+                    if (key === 'geoData') {
+                        value = Object.keys(peer[key]).map(geoDataKey => `<b>${geoDataKey}:</b> ${peer[key][geoDataKey]}`).join('<br>');
+                    } else {
+                        value = peer[key];
+                    }
+                    return `<b>${key}:</b> ${value}`;
+                }
+            ).join('<br>');
+
+
+            let myPlacemark = new ymaps.Placemark([peer.geoData.latitude, peer.geoData.longitude], {
+                hintContent: peer.peerName,
+                balloonContent: balloonContent
+            }, {
+                // Необходимо указать данный тип макета.
+                iconLayout: 'default#image',
+                iconImageHref: 'https://mir.one/wp-content/uploads/2019/04/tn_node.png',
+                iconImageSize: [30, 30],
+                iconContentLayout: MyIconContentLayout
+            });
+            myMap.geoObjects.add(myPlacemark);
+        });
+    };
+
+    const renderNodesInTable = (peers) => {
+        const $table = $('#table');
+        Object.keys(peers).forEach((peerKey, index) => {
+            const peer = peers[peerKey];
+            if (peer.geoData === undefined) {
+                console.log('No geo data:', peer);
+                return true;
+            }
+
+            $table.bootstrapTable('insertRow', {
+                index: 1,
+                row: {
+                    number: index + 1,
+                    name: peer.peerName,
+                    version: peer.applicationVersion,
+                    ip: peer.plainIp,
+                    country: `${flag(peer.geoData.country_code)} ${peer.geoData.country_name}`,
+                    city: peer.geoData.city,
+                    organization: peer.geoData.asn_org
+                }
+            })
+
+        });
+    }
+</script>
+</body>
+</html>
